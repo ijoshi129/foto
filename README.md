@@ -128,8 +128,3 @@ docker compose up -d --build
 ```
 
 Your data is preserved.
-
-## License
-
-MIT
-# foto

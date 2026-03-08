@@ -1,0 +1,12 @@
+services:
+  foto:
+    build: .
+    container_name: foto
+    ports:
+      - "8021:8021"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    environment:
+      - FOTO_USERNAME=admin
+      - FOTO_PASSWORD=changeme

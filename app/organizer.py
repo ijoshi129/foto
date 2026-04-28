@@ -70,16 +70,59 @@ def _get_video_date(file_path: str) -> Optional[datetime]:
         return None
 
 
-def _get_image_date(file_path: str) -> Optional[datetime]:
+_EXIF_DATE_TAGS = (
+    36867,  # DateTimeOriginal — when the photo was taken (preferred)
+    36868,  # DateTimeDigitized
+    306,    # DateTime — last modified by camera/software
+)
+
+
+def _parse_exif_dt(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+    value = str(value).strip().rstrip("\x00")
+    if not value:
+        return None
     try:
-        img = Image.open(file_path)
-        exif_bytes = img.info.get("exif")
-        if exif_bytes:
-            exif_data = piexif.load(exif_bytes)
-            dto = exif_data.get("Exif", {}).get(piexif.ExifIFD.DateTimeOriginal)
-            if dto:
-                date_str = dto.decode("utf-8") if isinstance(dto, bytes) else dto
-                return datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+        return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _get_image_date(file_path: str) -> Optional[datetime]:
+    # `with` ensures the underlying file handle is released — important when
+    # processing thousands of files in one job.
+    try:
+        with Image.open(file_path) as img:
+            # Path 1: piexif on the raw EXIF blob in img.info — works for
+            # most JPEGs and is the fastest.
+            exif_bytes = img.info.get("exif")
+            if exif_bytes:
+                try:
+                    exif_data = piexif.load(exif_bytes)
+                    dto = exif_data.get("Exif", {}).get(piexif.ExifIFD.DateTimeOriginal)
+                    dt = _parse_exif_dt(dto)
+                    if dt is not None:
+                        return dt
+                except Exception:
+                    pass
+
+            # Path 2: Pillow's getexif() — covers HEIC, some PNGs, and JPEGs
+            # whose EXIF lives in an APP segment piexif doesn't reach.
+            try:
+                exif = img.getexif()
+            except Exception:
+                exif = None
+            if exif:
+                for tag in _EXIF_DATE_TAGS:
+                    dt = _parse_exif_dt(exif.get(tag))
+                    if dt is not None:
+                        return dt
     except Exception:
         pass
     return None
@@ -158,7 +201,10 @@ def organize_photos(
         dest_subdir = date_dirs[date_str]
         safe_name = _safe_filename(dest_subdir, orig_name)
         dest_path = os.path.join(dest_subdir, safe_name)
-        shutil.copy2(tmp_path, dest_path)
+        # Same-filesystem move (staging tmp → date subdir under the same
+        # staging root): becomes a rename, so we don't double disk usage on
+        # large imports. shutil.move falls back to copy+unlink across FSes.
+        shutil.move(tmp_path, dest_path)
 
         # Set mtime to the original capture date so nas.py preserves it
         epoch = dt.timestamp()

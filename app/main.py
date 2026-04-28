@@ -382,15 +382,38 @@ async def organize(
 
     _UPLOAD_CHUNK = 8 * 1024 * 1024  # 8 MB read chunks
     staged: List[tuple] = []
+    used_names: set = set()
     for upload in files:
-        dest = os.path.join(staging_dir, upload.filename or "unnamed")
+        # Strip any directory components a malicious/odd client may have sent
+        # (path traversal: "../etc/passwd" → "passwd"; absolute paths → basename).
+        raw = upload.filename or ""
+        safe_name = os.path.basename(raw.replace("\\", "/")).strip()
+        if safe_name in ("", ".", ".."):
+            safe_name = "unnamed"
+
+        # Disambiguate collisions inside the staging dir so two uploads with
+        # the same filename don't silently overwrite one another.
+        unique_name = safe_name
+        if unique_name in used_names:
+            stem, ext = os.path.splitext(safe_name)
+            n = 1
+            while True:
+                unique_name = f"{stem}_{n}{ext}"
+                if unique_name not in used_names:
+                    break
+                n += 1
+        used_names.add(unique_name)
+
+        dest = os.path.join(staging_dir, unique_name)
         with open(dest, "wb") as f:
             while True:
                 chunk = await upload.read(_UPLOAD_CHUNK)
                 if not chunk:
                     break
                 f.write(chunk)
-        staged.append((upload.filename or "unnamed", dest))
+        # Keep the user-visible original name for the organizer; the unique
+        # staging path is just where the bytes live on disk.
+        staged.append((safe_name, dest))
 
     background_tasks.add_task(
         _run_job, job_id, selected_ids, staged, staging_dir

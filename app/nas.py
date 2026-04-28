@@ -3,13 +3,20 @@ NAS SMB share operations using smbprotocol (SMBv2/v3).
 Preserves file creation and modification timestamps on the NAS after each upload.
 """
 import os
+import time
 from typing import Callable, Optional
 
 import smbclient
 import smbclient.path
-from smbclient._os import _set_basic_information as _set_basic_info
 
 from .models import NASShare
+
+
+# Transient SMB/network errors will be retried up to this many attempts with
+# exponential backoff. Tuned for typical home-NAS hiccups (Wi-Fi blips, NAS
+# briefly busy), not for hours-long outages.
+_RETRY_ATTEMPTS = 4
+_RETRY_BASE_DELAY = 1.0  # seconds; doubled each attempt
 
 
 def _smb_path(share: NASShare, *parts: str) -> str:
@@ -47,6 +54,26 @@ def test_connection(share: NASShare) -> tuple[bool, str]:
         return False, f"Error: {e}"
 
 
+def _retry(share: NASShare, op_name: str, fn: Callable):
+    """Run fn() with retries on transient SMB errors. Re-registers the session
+    before each retry so a dropped connection is rebuilt cleanly. Re-raises
+    the last exception if all attempts fail."""
+    last_exc = None
+    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_exc = e
+            if attempt == _RETRY_ATTEMPTS:
+                break
+            time.sleep(_RETRY_BASE_DELAY * (2 ** (attempt - 1)))
+            try:
+                _register(share)
+            except Exception:
+                pass  # next attempt will surface the real error
+    raise RuntimeError(f"{op_name} failed after {_RETRY_ATTEMPTS} attempts: {last_exc}") from last_exc
+
+
 def _ensure_remote_dirs(share: NASShare, remote_unc: str):
     """Recursively create remote directories if they don't exist."""
     share_root = f"\\\\{share.ip}\\{share.share_name}"
@@ -55,8 +82,11 @@ def _ensure_remote_dirs(share: NASShare, remote_unc: str):
     current = share_root
     for part in parts:
         current = current + "\\" + part
-        if not smbclient.path.isdir(current):
-            smbclient.mkdir(current)
+        path = current  # bind for closure
+        def _mk(p=path):
+            if not smbclient.path.isdir(p):
+                smbclient.mkdir(p)
+        _retry(share, f"mkdir {path}", _mk)
 
 
 def copy_folder_to_share(
@@ -97,24 +127,28 @@ def copy_folder_to_share(
 
             local_mtime = os.path.getmtime(local_file)
 
-            with open(local_file, "rb") as local_fh:
-                with smbclient.open_file(remote_file, mode="wb") as remote_fh:
-                    while True:
-                        chunk = local_fh.read(8 * 1024 * 1024)
-                        if not chunk:
-                            break
-                        remote_fh.write(chunk)
+            def _copy_one(lf=local_file, rf=remote_file):
+                # If a previous attempt left a partial file on the NAS, get
+                # rid of it so we always write a complete copy.
+                try:
+                    if smbclient.path.exists(rf):
+                        smbclient.remove(rf)
+                except Exception:
+                    pass
+                with open(lf, "rb") as local_fh:
+                    with smbclient.open_file(rf, mode="wb") as remote_fh:
+                        while True:
+                            chunk = local_fh.read(8 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            remote_fh.write(chunk)
 
-            # Preserve creation and modification times on the NAS
+            _retry(share, f"copy {filename}", _copy_one)
+
+            # Preserve modification (and access) time on the NAS so the
+            # photo's "Date Modified" still reflects when it was taken.
             try:
-                filetime = int(local_mtime * 10000000) + 116444736000000000
-                _set_basic_info(
-                    remote_file,
-                    creation_time=filetime,
-                    last_access_time=filetime,
-                    last_write_time=filetime,
-                    file_attributes=0,
-                )
+                smbclient.utime(remote_file, times=(local_mtime, local_mtime))
             except Exception:
                 pass  # Non-fatal: file is copied, timestamps may not be set
 

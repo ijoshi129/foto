@@ -32,24 +32,32 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Known video extensions (lower-case, with leading dot)
+# Files for which hachoir is the primary date source (video + audio
+# containers). Anything else is tried as an image first, with hachoir as a
+# fallback so unusual extensions still get a chance at embedded metadata.
 # ---------------------------------------------------------------------------
-_VIDEO_EXTENSIONS = {
+_HACHOIR_PRIMARY_EXTENSIONS = {
+    # Video
     ".mp4", ".mov", ".m4v", ".mts", ".m2ts", ".avi", ".mkv",
     ".wmv", ".flv", ".webm", ".3gp", ".3g2",
+    # Audio
+    ".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".wma",
 }
 
 
-def _is_video(file_path: str) -> bool:
-    ext = os.path.splitext(file_path)[1].lower()
-    return ext in _VIDEO_EXTENSIONS
+def _hachoir_first(file_path: str) -> bool:
+    return os.path.splitext(file_path)[1].lower() in _HACHOIR_PRIMARY_EXTENSIONS
 
 
 # ---------------------------------------------------------------------------
 # Date extraction
 # ---------------------------------------------------------------------------
 
-def _get_video_date(file_path: str) -> Optional[datetime]:
+def _get_hachoir_date(file_path: str) -> Optional[datetime]:
+    """Extract creation_date via hachoir. Works for video containers (MP4,
+    MOV, MTS, AVI, MKV, ...) and audio formats with metadata (WAV/BEXT,
+    MP3/ID3, FLAC, OGG). Returns None if hachoir is unavailable, the file
+    is unparseable, or no creation_date is present."""
     if not _HACHOIR_AVAILABLE:
         return None
     try:
@@ -129,16 +137,24 @@ def _get_image_date(file_path: str) -> Optional[datetime]:
 
 
 def _get_date(file_path: str) -> datetime:
-    dt: Optional[datetime] = None
+    # Try in extension-appropriate order, but always cross-check the other
+    # extractor when the first one fails — that way an audio file (e.g. WAV)
+    # tried as image first still gets hachoir, and a misnamed image still
+    # gets EXIF.
+    extractors = (
+        (_get_hachoir_date, _get_image_date)
+        if _hachoir_first(file_path)
+        else (_get_image_date, _get_hachoir_date)
+    )
+    for extractor in extractors:
+        dt = extractor(file_path)
+        if dt is not None:
+            return dt
 
-    if _is_video(file_path):
-        dt = _get_video_date(file_path)
-    else:
-        dt = _get_image_date(file_path)
-
-    if dt is not None:
-        return dt
-
+    # Last resort: filesystem mtime. The upload step sets the staging file's
+    # mtime to the browser-reported `lastModified`, so for files lacking any
+    # embedded date this still gives the user's actual file date — not the
+    # upload time.
     return datetime.fromtimestamp(os.path.getmtime(file_path))
 
 

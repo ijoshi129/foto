@@ -359,6 +359,11 @@ async def organize(
     background_tasks: BackgroundTasks,
     share_ids: str = Form(...),          # comma-separated share UUIDs
     files: List[UploadFile] = File(...),
+    # Parallel array of File.lastModified epoch milliseconds, one per file
+    # in upload order. Used to stamp the staging file's mtime so files
+    # without embedded EXIF / metadata still sort by the user's actual file
+    # date instead of the upload time.
+    file_lastmod: List[str] = Form(default=[]),
     _: str = Depends(require_auth),
 ):
     selected_ids = [s.strip() for s in share_ids.split(",") if s.strip()]
@@ -383,7 +388,7 @@ async def organize(
     _UPLOAD_CHUNK = 8 * 1024 * 1024  # 8 MB read chunks
     staged: List[tuple] = []
     used_names: set = set()
-    for upload in files:
+    for idx, upload in enumerate(files):
         # Strip any directory components a malicious/odd client may have sent
         # (path traversal: "../etc/passwd" → "passwd"; absolute paths → basename).
         raw = upload.filename or ""
@@ -411,6 +416,19 @@ async def organize(
                 if not chunk:
                     break
                 f.write(chunk)
+
+        # Stamp the staging file with the browser-reported lastModified so
+        # files without embedded EXIF / metadata still sort by the user's
+        # actual file date when the organizer falls back to mtime.
+        if idx < len(file_lastmod):
+            try:
+                lm_ms = float(file_lastmod[idx])
+                if lm_ms > 0:
+                    ts = lm_ms / 1000.0
+                    os.utime(dest, (ts, ts))
+            except (ValueError, OSError):
+                pass
+
         # Keep the user-visible original name for the organizer; the unique
         # staging path is just where the bytes live on disk.
         staged.append((safe_name, dest))

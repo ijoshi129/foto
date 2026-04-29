@@ -810,7 +810,13 @@ async function submitJob() {
 
   const formData = new FormData();
   formData.append('share_ids', shareIds);
-  selectedFiles.forEach(f => formData.append('files', f));
+  // Send each file alongside its OS-reported lastModified (epoch ms) so the
+  // server can use the user's actual file date as a fallback when no EXIF /
+  // metadata is present. Order is preserved across the two repeated fields.
+  selectedFiles.forEach(f => {
+    formData.append('files', f);
+    formData.append('file_lastmod', String(f.lastModified || 0));
+  });
 
   const btn = document.getElementById('process-btn');
   btn.disabled = true;

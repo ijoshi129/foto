@@ -1,6 +1,6 @@
 services:
   foto:
-    image: 10.0.0.58:5002/foto:1.0.1
+    image: 10.0.0.58:5002/foto:1.0.2
     container_name: foto
     ports:
       - "8021:8021"

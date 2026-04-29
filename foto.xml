@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>foto</Name>
+  <Repository>10.0.0.58:5002/foto:1.0.2</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>Organize camera SD card photos by EXIF date and copy them to your NAS drives.</Overview>
+  <Category>MediaApp:Photos Backup:</Category>
+  <WebUI>http://[IP]:[PORT:8021]/</WebUI>
+  <TemplateURL/>
+  <Icon/>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Description>Organize camera SD card photos by EXIF date and copy them to as many NAS SMB shares as you want, with Discord notifications.</Description>
+  <Config Name="WebUI" Target="8021" Default="8021" Mode="tcp" Description="Web UI port" Type="Port" Display="always" Required="true" Mask="false">8021</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/foto" Mode="rw" Description="Config and job history" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/foto</Config>
+  <Config Name="Username" Target="FOTO_USERNAME" Default="admin" Mode="" Description="Initial login username (only used on first run)" Type="Variable" Display="always" Required="true" Mask="false">admin</Config>
+  <Config Name="Password" Target="FOTO_PASSWORD" Default="changeme" Mode="" Description="Initial login password (only used on first run) - CHANGE THIS" Type="Variable" Display="always" Required="true" Mask="true">changeme</Config>
+</Container>
